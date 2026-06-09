@@ -46,9 +46,19 @@ class WebsocketClientPolicy:
         self._api_key = api_key
         self._ws, self._server_metadata = None, None
         self._allow_reconnect = allow_reconnect
+        self._last_done = False
+        self._needs_fresh_obs = True
 
     def get_server_metadata(self) -> Dict:
         return self._server_metadata
+
+    @property
+    def is_done(self) -> bool:
+        return self._last_done
+
+    @property
+    def needs_obs(self) -> bool:
+        return self._needs_fresh_obs
 
     def _wait_for_server(self) -> Tuple[websockets.sync.client.ClientConnection, Dict]:
         # TODO [Wensi]: use URL parser instead of this
@@ -91,11 +101,12 @@ class WebsocketClientPolicy:
                 logger.info(f"Websocket connection failed ({e}), retrying...")
                 time.sleep(5)
 
-    def act(self, obs: Dict) -> th.Tensor:
+    def act(self, obs: Optional[Dict]) -> th.Tensor:
         if self._ws is None:
             self._ws, self._server_metadata = self._wait_for_server()
 
-        data = self._packer.pack(obs)
+        request_payload = obs if self._needs_fresh_obs else {"reuse_cached_action": True}
+        data = self._packer.pack(request_payload)
         while True:
             try:
                 self._ws.send(data)
@@ -111,6 +122,8 @@ class WebsocketClientPolicy:
             # we're expecting bytes; if the server sends a string, it's an error.
             raise RuntimeError(f"Error in inference server:\n{response}")
         action_dict = unpackb(response)
+        self._last_done = bool(action_dict.get("done", False))
+        self._needs_fresh_obs = bool(action_dict.get("need_obs", True))
         try:
             action_np = deepcopy(action_dict["action"])
         except KeyError:
@@ -119,6 +132,8 @@ class WebsocketClientPolicy:
             self._ws.send(data)
             response = self._ws.recv()
             action_dict = unpackb(response)
+            self._last_done = bool(action_dict.get("done", False))
+            self._needs_fresh_obs = bool(action_dict.get("need_obs", True))
             action_np = deepcopy(action_dict["action"])
         action = th.from_numpy(action_np).to(th.float32)
         return action
@@ -129,6 +144,8 @@ class WebsocketClientPolicy:
 
         data = self._packer.pack({"reset": True})
         self._ws.send(data)
+        self._last_done = False
+        self._needs_fresh_obs = True
 
 
 class WebsocketPolicyServer:
@@ -179,14 +196,32 @@ class WebsocketPolicyServer:
                     self._policy.reset()
                     continue
 
-                obs = deepcopy(result)
+                reuse_cached_action = bool(result.get("reuse_cached_action", False))
+                obs = None if reuse_cached_action else deepcopy(result)
 
                 infer_time = time.monotonic()
                 action = self._policy.act(obs)
                 infer_time = time.monotonic() - infer_time
 
+                need_obs = True
+                if hasattr(self._policy, "needs_observation"):
+                    needs_observation = getattr(self._policy, "needs_observation")
+                    need_obs = bool(needs_observation() if callable(needs_observation) else needs_observation)
+                elif hasattr(self._policy, "needs_obs"):
+                    needs_obs = getattr(self._policy, "needs_obs")
+                    need_obs = bool(needs_obs() if callable(needs_obs) else needs_obs)
+
+                if hasattr(action, "detach"):
+                    action_np = action.detach().cpu().numpy()
+                elif hasattr(action, "cpu"):
+                    action_np = action.cpu().numpy()
+                else:
+                    action_np = np.asarray(action)
+
                 action = {
-                    "action": action.cpu().numpy(),
+                    "action": action_np,
+                    "need_obs": need_obs,
+                    "done": bool(getattr(self._policy, "is_done", False)),
                 }
                 action["server_timing"] = {
                     "infer_ms": infer_time * 1000,

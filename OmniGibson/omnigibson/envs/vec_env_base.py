@@ -23,13 +23,14 @@ class VectorEnvironment:
         for env in self.envs:
             env.post_play_load()
 
-    def step(self, actions):
+    def step(self, actions, get_obs=True, render=True):
         observations, rewards, terminates, truncates, infos = [], [], [], [], []
         for i, action in enumerate(actions):
             self.envs[i]._pre_step(action)
-        og.sim.step()
+        with og.sim.render_on_step(render):
+            og.sim.step()
         for i, action in enumerate(actions):
-            obs, reward, terminated, truncated, info = self.envs[i]._post_step(action)
+            obs, reward, terminated, truncated, info = self.envs[i]._post_step(action, get_obs=get_obs)
             observations.append(obs)
             rewards.append(reward)
             terminates.append(terminated)

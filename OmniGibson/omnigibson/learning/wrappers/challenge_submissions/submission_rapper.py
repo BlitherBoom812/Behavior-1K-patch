@@ -306,11 +306,17 @@ class RAPPERWrapper(EnvironmentWrapper):
             return None
         return None
 
-    def step(self, action, n_render_iterations=1):
-        obs, reward, terminated, truncated, info = self.env.step(action, n_render_iterations=n_render_iterations)
+    def step(self, action, n_render_iterations=1, get_obs=True, render=True):
+        obs, reward, terminated, truncated, info = self.env.step(
+            action,
+            n_render_iterations=n_render_iterations,
+            get_obs=get_obs,
+            render=render,
+        )
         if self._done:
             return obs, reward, True, truncated, info
-        self._inject_robot_and_target(obs)
+        if get_obs:
+            self._inject_robot_and_target(obs)
         return obs, reward, terminated, truncated, info
 
     def reset(self):

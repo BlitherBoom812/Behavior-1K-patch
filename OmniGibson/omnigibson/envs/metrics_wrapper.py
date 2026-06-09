@@ -197,12 +197,18 @@ class MetricsWrapper(EnvironmentWrapper):
 
         return results
 
-    def step(self, action, n_render_iterations=1):
+    def step(self, action, n_render_iterations=1, get_obs=True, render=True):
         # Run super first
-        obs, reward, terminated, truncated, info = super().step(action, n_render_iterations=n_render_iterations)
+        obs, reward, terminated, truncated, info = super().step(
+            action,
+            n_render_iterations=n_render_iterations,
+            get_obs=get_obs,
+            render=render,
+        )
 
         # Run all step-wise QA checks
-        for name, metric in self.metrics.items():
-            metric.step(self.env, action, obs, reward, terminated, truncated, info)
+        if get_obs:
+            for name, metric in self.metrics.items():
+                metric.step(self.env, action, obs, reward, terminated, truncated, info)
 
         return obs, reward, terminated, truncated, info

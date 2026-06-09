@@ -89,13 +89,15 @@ class DataWrapper(EnvironmentWrapper):
         # Run super
         super().__init__(env=env)
 
-    def step(self, action, n_render_iterations=1):
+    def step(self, action, n_render_iterations=1, get_obs=True, render=True):
         """
         Run the environment step() function and collect data
 
         Args:
             action (th.Tensor): action to take in environment
             n_render_iterations (int): Number of rendering iterations to use before returning observations
+            get_obs (bool): Whether to fetch observations after the physics step
+            render (bool): Whether to render on the simulator step
 
         Returns:
             5-tuple:
@@ -109,10 +111,16 @@ class DataWrapper(EnvironmentWrapper):
         if isinstance(action, dict):
             action = th.cat([act for act in action.values()])
 
-        next_obs, reward, terminated, truncated, info = self.env.step(action, n_render_iterations=n_render_iterations)
+        next_obs, reward, terminated, truncated, info = self.env.step(
+            action,
+            n_render_iterations=n_render_iterations,
+            get_obs=get_obs,
+            render=render,
+        )
         self.step_count += 1
 
-        self._record_step_trajectory(action, next_obs, reward, terminated, truncated, info)
+        if get_obs:
+            self._record_step_trajectory(action, next_obs, reward, terminated, truncated, info)
 
         return next_obs, reward, terminated, truncated, info
 

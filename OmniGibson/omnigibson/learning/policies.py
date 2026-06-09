@@ -49,24 +49,38 @@ class WebsocketPolicy:
         *args,
         host: Optional[str] = None,
         port: Optional[int] = None,
+        allow_reconnect: bool = False,
         **kwargs,
     ) -> None:
+        self._host = host
+        self._port = port
+        self._allow_reconnect = allow_reconnect
         logging.info(f"Creating websocket client policy with host: {host}, port: {port}")
         self.last_action = None
         self.policy = None
         if host is not None or port is not None:
-            self.policy = WebsocketClientPolicy(host=host, port=port)
+            self.policy = WebsocketClientPolicy(host=host, port=port, allow_reconnect=allow_reconnect)
 
     def update_host(self, host: str, port: int) -> None:
-        self.policy = WebsocketClientPolicy(host=host, port=port)
+        self._host = host
+        self._port = port
+        self.policy = WebsocketClientPolicy(host=host, port=port, allow_reconnect=self._allow_reconnect)
 
-    def forward(self, obs: dict, *args, **kwargs) -> th.Tensor:
-        if "need_new_action" in obs and not obs["need_new_action"] and self.last_action is not None:
+    def forward(self, obs: Optional[dict], *args, **kwargs) -> th.Tensor:
+        if obs is not None and "need_new_action" in obs and not obs["need_new_action"] and self.last_action is not None:
             return self.last_action
         # convert observation to numpy
-        obs = torch_to_numpy(obs)
+        obs = torch_to_numpy(obs) if obs is not None else None
         self.last_action = self.policy.act(obs).detach().cpu()
         return self.last_action
+
+    @property
+    def is_done(self) -> bool:
+        return bool(self.policy is not None and getattr(self.policy, "is_done", False))
+
+    @property
+    def needs_obs(self) -> bool:
+        return bool(self.policy is None or getattr(self.policy, "needs_obs", True))
 
     def reset(self) -> None:
         if self.policy is not None:

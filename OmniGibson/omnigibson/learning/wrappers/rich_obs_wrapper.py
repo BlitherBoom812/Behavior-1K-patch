@@ -37,13 +37,15 @@ class RichObservationWrapper(EnvironmentWrapper):
         env.task._include_obs = True
         logger.info("Reloaded observation space!")
 
-    def step(self, action, n_render_iterations=1):
+    def step(self, action, n_render_iterations=1, get_obs=True, render=True):
         """
         By default, run the normal environment step() function
 
         Args:
             action (th.tensor): action to take in environment
             n_render_iterations (int): Number of rendering iterations to use before returning observations
+            get_obs (bool): Whether to fetch observations after the physics step
+            render (bool): Whether to render on the simulator step
 
         Returns:
             4-tuple:
@@ -53,7 +55,14 @@ class RichObservationWrapper(EnvironmentWrapper):
                 - (bool) whether the current episode is truncated
                 - (dict) misc information
         """
-        obs, reward, terminated, truncated, info = self.env.step(action, n_render_iterations=n_render_iterations)
+        obs, reward, terminated, truncated, info = self.env.step(
+            action,
+            n_render_iterations=n_render_iterations,
+            get_obs=get_obs,
+            render=render,
+        )
+        if not get_obs:
+            return obs, reward, terminated, truncated, info
         # Now, query for some additional privileged task info
         obs["task"] = self.env.task.get_obs(self.env)
         return obs, reward, terminated, truncated, info

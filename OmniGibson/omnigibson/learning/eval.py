@@ -81,6 +81,10 @@ class Evaluator:
         self.n_success_trials = 0
         self.total_time = 0
         self.robot_action = dict()
+        self.last_step_had_obs = False
+        self.last_step_reward = None
+        self.last_step_info = None
+        self.last_policy_done = False
 
         self.env = self.load_env(env_wrapper=self.cfg.env_wrapper)
         self.policy = self.load_policy()
@@ -184,6 +188,24 @@ class Evaluator:
         """
         return [AgentMetric(self.human_stats), TaskMetric(self.human_stats)]
 
+    def _cfg_bool(self, key: str, default: bool = False) -> bool:
+        return bool(OmegaConf.select(self.cfg, key, default=default))
+
+    def _cfg_value(self, key: str, default: Any = None) -> Any:
+        return OmegaConf.select(self.cfg, key, default=default)
+
+    def _policy_needs_obs(self) -> bool:
+        return bool(getattr(self.policy, "needs_obs", True))
+
+    def _query_policy_action(self, obs: dict) -> th.Tensor:
+        if hasattr(self.policy, "forward"):
+            action = self.policy.forward(obs=obs)
+        elif hasattr(self.policy, "act"):
+            action = self.policy.act(obs)
+        else:
+            raise AttributeError(f"Unsupported policy interface: {type(self.policy)}")
+        return th.as_tensor(action, dtype=th.float32)
+
     def step(self) -> Tuple[bool, bool]:
         """
         Performs a single step of the task by executing the policy, interacting with the environment,
@@ -204,17 +226,33 @@ class Evaluator:
             5. Invokes step callbacks for all registered metrics to update their state.
             6. Returns the termination and truncation status.
         """
-        self.robot_action = self.policy.forward(obs=self.obs)
+        current_obs = self.obs if self._policy_needs_obs() else None
+        self.robot_action = self._query_policy_action(current_obs)
+        needs_obs_after_step = self._policy_needs_obs()
+        fast_skip = self._cfg_bool("fast_skip_intermediate_obs", default=False)
+        fast_video_mode = self._cfg_value("fast_video_mode", default="full")
+        write_full_video = self.cfg.write_video and fast_video_mode == "full"
+        skip_step_obs = fast_skip and not needs_obs_after_step and not write_full_video
 
-        obs, _, terminated, truncated, info = self.env.step(self.robot_action, n_render_iterations=1)
+        obs, reward, terminated, truncated, info = self.env.step(
+            self.robot_action,
+            n_render_iterations=1,
+            get_obs=not skip_step_obs,
+            render=not skip_step_obs,
+        )
 
-        # process obs
-        self.obs = self._preprocess_obs(obs)
+        self.last_step_had_obs = obs is not None
+        if self.last_step_had_obs:
+            self.obs = self._preprocess_obs(obs)
 
         if terminated or truncated:
             self.n_trials += 1
             if info["done"]["success"]:
                 self.n_success_trials += 1
+
+        self.last_step_reward = reward
+        self.last_step_info = info
+        self.last_policy_done = bool(getattr(self.policy, "is_done", False))
 
         for metric in self.metrics:
             metric.step_callback(self.env)
@@ -299,6 +337,7 @@ class Evaluator:
         Returns:
             dict: The preprocessed observation dictionary.
         """
+        assert obs is not None, "Cannot preprocess a skipped observation step."
         obs = flatten_obs_dict(obs)
         base_pose = self.robot.get_position_orientation()
         cam_rel_poses = []
@@ -354,6 +393,10 @@ class Evaluator:
         Reset the environment, policy, and compute metrics.
         """
         self.obs = self._preprocess_obs(self.env.reset()[0])
+        self.last_step_had_obs = True
+        self.last_step_reward = None
+        self.last_step_info = None
+        self.last_policy_done = False
         # run metric start callbacks
         for metric in self.metrics:
             metric.start_callback(self.env)
@@ -393,6 +436,9 @@ if __name__ == "__main__":
     OmegaConf.resolve(config)
     # set headless mode
     gm.HEADLESS = config.headless
+    gm.RENDER_VIEWER_CAMERA = not bool(OmegaConf.select(config, "fast_disable_viewports", default=False))
+    fast_video_mode = OmegaConf.select(config, "fast_video_mode", default="full")
+    assert fast_video_mode in {"full", "boundary"}, "fast_video_mode must be either 'full' or 'boundary'"
     # set video path
     if config.write_video:
         video_path = Path(config.log_path).expanduser() / "videos"
@@ -472,7 +518,7 @@ if __name__ == "__main__":
                     terminated, truncated = evaluator.step()
                     if terminated or truncated:
                         done = True
-                    if config.write_video:
+                    if config.write_video and (fast_video_mode == "full" or evaluator.last_step_had_obs):
                         evaluator._write_video()
                     if evaluator.env._current_step % 1000 == 0:
                         logger.info(f"Current step: {evaluator.env._current_step}")

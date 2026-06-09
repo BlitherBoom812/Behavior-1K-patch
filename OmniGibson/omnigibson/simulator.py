@@ -153,7 +153,14 @@ def _launch_app():
     # If multi_gpu is used, og.sim.render() will cause a segfault when called during on_contact callbacks,
     # e.g. when an attachment joint is being created due to contacts (create_joint calls og.sim.render() internally).
     gpu_id = None if gm.GPU_ID is None else int(gm.GPU_ID)
-    config_kwargs = {"headless": gm.HEADLESS or bool(gm.REMOTE_STREAMING), "multi_gpu": False}
+    config_kwargs = {
+        "headless": gm.HEADLESS or bool(gm.REMOTE_STREAMING),
+        "multi_gpu": False,
+        "extra_args": [
+            "--/plugins/carb.tasking.plugin/threadCount=8",
+            "--/plugins/omni.tbb.globalcontrol/maxThreadCount=4",
+        ],
+    }
     if gpu_id is not None:
         config_kwargs["active_gpu"] = gpu_id
         config_kwargs["physics_gpu"] = gpu_id

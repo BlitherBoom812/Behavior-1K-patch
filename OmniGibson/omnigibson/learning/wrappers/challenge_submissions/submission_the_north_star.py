@@ -20,7 +20,13 @@ class TheNorthStarWrapper(EnvironmentWrapper):
         env (og.Environment): The environment to wrap.
     """
 
-    def step(self, robot_action: th.Tensor, n_render_iterations: int) -> Tuple[dict, float, bool, bool, dict]:
+    def step(
+        self,
+        robot_action: th.Tensor,
+        n_render_iterations: int,
+        get_obs: bool = True,
+        render: bool = True,
+    ) -> Tuple[dict, float, bool, bool, dict]:
         if self.action_buffer is None or self.current_action_idx >= self.horizon:
             # We just resetted or exhausted the previous action buffer
             self.obs_buffer = []
@@ -29,10 +35,17 @@ class TheNorthStarWrapper(EnvironmentWrapper):
             self.current_action_idx = 0
         current_action = self.action_buffer[self.current_action_idx]
 
-        obs, _, terminated, truncated, info = self.env.step(current_action, n_render_iterations=n_render_iterations)
+        obs, _, terminated, truncated, info = self.env.step(
+            current_action,
+            n_render_iterations=n_render_iterations,
+            get_obs=get_obs,
+            render=render,
+        )
 
         # process obs
-        if self.current_action_idx + 1 == self.horizon:
+        if not get_obs:
+            pass
+        elif self.current_action_idx + 1 == self.horizon:
             # We exhausted the action buffer, need to get new action from policy
             # activate for nav module, inactivate for efficiency
             obs["past_obs"] = self.obs_buffer

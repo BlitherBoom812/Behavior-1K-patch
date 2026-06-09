@@ -588,10 +588,12 @@ class Environment(gym.Env, GymObservable, Recreatable):
         for robot in self.robots:
             robot.apply_action(action_dict[robot.name])
 
-    def _post_step(self, action):
-        """Apply the post-sim-step part of an environment step, i.e. grab observations and return the step results."""
-        # Grab observations
-        obs, obs_info = self.get_obs()
+    def _post_step(self, action, get_obs=True):
+        """Apply the post-sim-step part of an environment step."""
+        # Grab observations only when the caller needs a fresh policy input.
+        obs, obs_info = (None, None)
+        if get_obs:
+            obs, obs_info = self.get_obs()
 
         # Step the scene graph builder if necessary
         if self._scene_graph_builder is not None:
@@ -600,12 +602,16 @@ class Environment(gym.Env, GymObservable, Recreatable):
         # Grab reward, done, and info, and populate with internal info
         reward, done, info = self.task.step(self, action)
         self._populate_info(info)
-        info["obs_info"] = obs_info
+        if get_obs:
+            info["obs_info"] = obs_info
 
         if done and self._automatic_reset:
             # Add lost observation to our information dict, and reset
-            info["last_observation"] = obs
-            obs = self.reset()
+            if get_obs:
+                info["last_observation"] = obs
+                obs = self.reset()
+            else:
+                self.reset(get_obs=False)
 
         # Hacky way to check for time limit info to split terminated and truncated
         terminated = False
@@ -622,7 +628,7 @@ class Environment(gym.Env, GymObservable, Recreatable):
         self._current_step += 1
         return obs, reward, terminated, truncated, info
 
-    def step(self, action, n_render_iterations=1):
+    def step(self, action, n_render_iterations=1, get_obs=True, render=True):
         """
         Apply robot's action and return the next state, reward, done and info,
         following OpenAI Gym's convention
@@ -632,6 +638,8 @@ class Environment(gym.Env, GymObservable, Recreatable):
                 map robot name to corresponding action. If a th.tensor, it should be the flattened, concatenated set
                 of actions
             n_render_iterations (int): Number of rendering iterations to use before returning observations
+            get_obs (bool): Whether to fetch observations after the physics step
+            render (bool): Whether to render on the simulator step
 
         Returns:
             5-tuple:
@@ -646,14 +654,16 @@ class Environment(gym.Env, GymObservable, Recreatable):
         self._pre_step(action)
 
         # Step simulation
-        og.sim.step()
+        with og.sim.render_on_step(render):
+            og.sim.step()
 
         # Render any additional times requested
-        for _ in range(n_render_iterations - 1):
-            og.sim.render()
+        if render and get_obs:
+            for _ in range(n_render_iterations - 1):
+                og.sim.render()
 
         # Run final post-processing
-        return self._post_step(action)
+        return self._post_step(action, get_obs=get_obs)
 
     def render(self):
         """Render the environment for debug viewing."""
